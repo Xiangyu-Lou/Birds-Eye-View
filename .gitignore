@@ -1,6 +1,6 @@
 # Ignore muscenes dataset
-muscenes/
-muscenes/**/*
+nuscenes/
+nuscenes/**/*
 
 # Python
 __pycache__/
