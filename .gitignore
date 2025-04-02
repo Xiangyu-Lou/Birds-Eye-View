@@ -1,6 +1,8 @@
-# Ignore muscenes dataset
-nuscenes/
-nuscenes/**/*
+# Ignore dataset
+v1.0-mini/
+v1.0-mini/**/*
+trainval/
+trainval/**/*
 
 # Python
 __pycache__/
