@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import cv2
 from nuscenes.nuscenes import NuScenes
 from pyquaternion import Quaternion
-from forward_projection import extract_data, compute_coordinate_transforms, generate_bird_eye_view_torch, post_process_bev_torch, create_bird_eye_view_torch, visualize_bev
+from forward_projection_cuda import extract_data, compute_coordinate_transforms, generate_bird_eye_view_torch, post_process_bev_torch, create_bird_eye_view_torch, visualize_bev
 import concurrent.futures
 import time
 

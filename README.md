@@ -10,7 +10,7 @@ nuscenes
 │     sweeps
 │     v1.0-trainval
 │   
-└───mini
+└───v1.0-mini
       maps
       samples
       sweeps

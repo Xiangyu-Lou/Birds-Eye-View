@@ -2,61 +2,49 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 from nuscenes.nuscenes import NuScenes
-import time
 import concurrent.futures
-from backward_projection_cpu import create_bev_view, smooth_bev_image
+from backward_projection import create_bev_view, smooth_bev_image
 from pyquaternion import Quaternion
-from calculate_projection_matrix import calculate_projection_matrix
 
-# 初始化NuScenes实例
 nusc = NuScenes(version='v1.0-mini', dataroot='F:/Project/nuscenes-devkit/v1.0-mini', verbose=False)
-
-def get_camera_channels():
-    """
-    获取nuScenes中的所有相机通道
-    
-    返回:
-    - camera_channels: 相机通道列表
-    """
-    camera_channels = [
+camera_channels = [
         'CAM_FRONT',
         'CAM_FRONT_LEFT',
         'CAM_FRONT_RIGHT',
         'CAM_BACK',
         'CAM_BACK_LEFT',
         'CAM_BACK_RIGHT'
-    ]
-    return camera_channels
+        ]
 
 def get_camera_info(sample_token, cam_channel):
     """
-    获取相机在车辆坐标系中的位置和方向信息
+    Get camera position and orientation information in vehicle coordinate system
     
-    参数:
-    - sample_token: 样本token
-    - cam_channel: 相机通道
+    Args:
+    - sample_token: sample token
+    - cam_channel: camera channel
     
-    返回:
-    - camera_info: 包含相机信息的字典
+    Returns:
+    - camera_info: dictionary containing camera information
     """
     sample = nusc.get('sample', sample_token)
     cam_token = sample['data'][cam_channel]
     cam_data = nusc.get('sample_data', cam_token)
     cs_record = nusc.get('calibrated_sensor', cam_data['calibrated_sensor_token'])
     
-    # 获取相机内参
+    # Get camera intrinsic parameters
     intrinsic = np.array(cs_record['camera_intrinsic'])
     
-    # 获取相机外参
+    # Get camera extrinsic parameters
     translation = np.array(cs_record['translation'])
     rotation = Quaternion(cs_record['rotation']).rotation_matrix
     
-    # 获取自车位姿
+    # Get ego pose
     ego_pose = nusc.get('ego_pose', cam_data['ego_pose_token'])
     ego_translation = np.array(ego_pose['translation'])
     ego_rotation = Quaternion(ego_pose['rotation']).rotation_matrix
     
-    # 返回相机信息
+    # Return camera information
     camera_info = {
         'translation': translation,
         'rotation': rotation,
@@ -69,67 +57,45 @@ def get_camera_info(sample_token, cam_channel):
 
 def process_single_camera(sample_token, cam_channel, bev_width=40, bev_length=40, resolution=0.04):
     """
-    处理单个相机的BEV投影
+    Process the BEV projection of a single camera
     
-    参数:
-    - sample_token: 样本token
-    - cam_channel: 相机通道
-    - bev_width: 俯视图宽度（米）
-    - bev_length: 俯视图长度（米）
-    - resolution: 分辨率（米/像素）
+    Args:
+    - sample_token: sample token
+    - cam_channel: camera channel
+    - bev_width: BEV width (meters)
+    - bev_length: BEV length (meters)   
+    - resolution: resolution (meters/pixel)
     
-    返回:
-    - bird_eye_view: 处理后的俯视图
-    - projection_mask: 投影掩码
-    - camera_info: 相机信息
+    Returns:
+    - bird_eye_view: processed BEV image
+    - projection_mask: projection mask
+    - camera_info: camera information   
     """
-    try:
-        # 获取相机信息
-        camera_info = get_camera_info(sample_token, cam_channel)
-        
-        # 使用backward_projection_cpu.py中的create_top_view函数
-        bird_eye_view, _ = create_bev_view(
-            sample_index=1, cam_channel=cam_channel, 
-            bev_width=bev_width, 
-            bev_length=bev_length, 
-            resolution=resolution
-        )
-        bird_eye_view = smooth_bev_image(bird_eye_view, resolution=0.04)
-        
-        # 创建投影掩码（Alpha > 0的区域）
-        projection_mask = (bird_eye_view[:, :, 3] > 0).astype(np.uint8)
-        
-        return bird_eye_view, projection_mask, camera_info
-        
-    except Exception as e:
-        print(f"处理相机 {cam_channel} 时出错: {str(e)}")
-        # 错误处理，返回空图像
-        bev_height = int(bev_length / resolution)
-        bev_width_pixels = int(bev_width / resolution)
-        empty_bev = np.zeros((bev_height, bev_width_pixels, 4), dtype=np.uint8)
-        empty_mask = np.zeros((bev_height, bev_width_pixels), dtype=np.uint8)
-        
-        # 返回空相机信息
-        empty_camera_info = {
-            'translation': np.zeros(3),
-            'rotation': np.eye(3),
-            'intrinsic': np.eye(3),
-            'ego_translation': np.zeros(3),
-            'ego_rotation': np.eye(3)
-        }
-        
-        return empty_bev, empty_mask, empty_camera_info
-
+    camera_info = get_camera_info(sample_token, cam_channel)
+    
+    bird_eye_view, _ = create_bev_view(
+        sample_token=sample_token, cam_channel=cam_channel, 
+        bev_width=bev_width, 
+        bev_length=bev_length, 
+        resolution=resolution
+    )
+    bird_eye_view = smooth_bev_image(bird_eye_view, cam_channel=cam_channel)
+    
+    # Create projection mask (Alpha > 0 area)
+    projection_mask = (bird_eye_view[:, :, 3] > 0).astype(np.uint8)
+    
+    return bird_eye_view, projection_mask, camera_info
+    
 def process_camera_worker(params):
     """
-    线程工作函数：处理单个相机BEV
+    Create a new thread to process the BEV projection of a single camera
     
-    参数:
-    - params: 包含处理所需参数的字典
+    Args:
+    - params: dictionary containing processing parameters
     
-    返回:
-    - 相机通道
-    - 处理结果 (bev, mask, camera_info)
+    Returns:
+    - camera channel
+    - processing result (bev, mask, camera_info)
     """
     sample_token = params['sample_token']
     cam_channel = params['cam_channel']
@@ -137,56 +103,36 @@ def process_camera_worker(params):
     bev_length = params['bev_length']
     resolution = params['resolution']
     
-    print(f"\n线程开始处理相机: {cam_channel}")
-    start_time = time.time()
+    print(f"\nThread starts processing camera: {cam_channel}")
     
-    try:
-        bev, mask, camera_info = process_single_camera(
-            sample_token, cam_channel, bev_width, bev_length, resolution
-        )
-        processing_time = time.time() - start_time
-        print(f"相机 {cam_channel} 处理完成，耗时: {processing_time:.2f}秒")
-        return cam_channel, (bev, mask, camera_info)
-    except Exception as e:
-        print(f"处理相机 {cam_channel} 时出错: {str(e)}")
-        # 返回空结果
-        bev_height = int(bev_length / resolution)
-        bev_width_pixels = int(bev_width / resolution)
-        empty_bev = np.zeros((bev_height, bev_width_pixels, 4), dtype=np.uint8)
-        empty_mask = np.zeros((bev_height, bev_width_pixels), dtype=np.uint8)
-        
-        # 返回空相机信息
-        empty_camera_info = {
-            'translation': np.zeros(3),
-            'rotation': np.eye(3),
-            'intrinsic': np.eye(3),
-            'ego_translation': np.zeros(3),
-            'ego_rotation': np.eye(3)
-        }
-        
-        return cam_channel, (empty_bev, empty_mask, empty_camera_info)
+    bev, mask, camera_info = process_single_camera(
+        sample_token, cam_channel, bev_width, bev_length, resolution
+    )
+    print(f"Camera {cam_channel} processed")
+    return {
+        'cam_channel': cam_channel,
+        'bev': bev,
+        'mask': mask,
+        'camera_info': camera_info
+    }
 
 def process_all_cameras_parallel(sample_token, bev_width=40, bev_length=40, resolution=0.04, max_workers=6):
     """
-    并行处理所有相机的BEV投影
+    Parallelly process the BEV projection of all cameras
     
-    参数:
-    - sample_token: 样本token
-    - bev_width: 俯视图宽度（米）
-    - bev_length: 俯视图长度（米）
-    - resolution: 分辨率（米/像素）
-    - max_workers: 最大线程数
+    Args:
+    - sample_token: sample token
+    - bev_width: BEV width (meters)
+    - bev_length: BEV length (meters)
+    - resolution: resolution (meters/pixel)
+    - max_workers: maximum number of threads
     
-    返回:
-    - bev_results: 包含所有相机BEV结果的字典
+    Returns:
+    - bev_results: dictionary containing all camera BEV results
     """
-    camera_channels = get_camera_channels()
     bev_results = {}
     
-    print(f"并行处理样本 {sample_token} 的所有相机")
-    start_time = time.time()
-    
-    # 准备线程任务参数
+    # Prepare thread task parameters
     tasks = []
     for cam_channel in camera_channels:
         params = {
@@ -197,258 +143,123 @@ def process_all_cameras_parallel(sample_token, bev_width=40, bev_length=40, reso
             'resolution': resolution
         }
         tasks.append(params)
-    
-    # 使用线程池并行处理
+        
+    # Use thread pool to parallelly process
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务
+        # Submit all tasks
         futures = [executor.submit(process_camera_worker, params) for params in tasks]
         
-        # 收集结果
+        # Collect results
         for future in concurrent.futures.as_completed(futures):
-            try:
-                cam_channel, (bev, mask, camera_info) = future.result()
-                bev_results[cam_channel] = {
-                    'bev': bev,
-                    'mask': mask,
-                    'camera_info': camera_info
-                }
-            except Exception as e:
-                print(f"获取任务结果时出错: {str(e)}")
-    
-    # 计算总处理时间
-    total_time = time.time() - start_time
-    print(f"\n所有相机并行处理完成，总耗时: {total_time:.2f}秒")
-    print(f"成功处理的相机数: {len(bev_results)}/{len(camera_channels)}")
-    
-    return bev_results
-
-def process_all_cameras(sample_token, bev_width=40, bev_length=40, resolution=0.04):
-    """
-    串行处理所有相机的BEV投影
-    
-    参数:
-    - sample_token: 样本token
-    - bev_width: 俯视图宽度（米）
-    - bev_length: 俯视图长度（米）
-    - resolution: 分辨率（米/像素）
-    
-    返回:
-    - bev_results: 包含所有相机BEV结果的字典
-    """
-    camera_channels = get_camera_channels()
-    bev_results = {}
-    
-    print(f"串行处理样本 {sample_token} 的所有相机")
-    start_time = time.time()
-    
-    for cam_channel in camera_channels:
-        print(f"\n处理相机: {cam_channel}")
-        cam_start = time.time()
-        try:
-            bev, mask, camera_info = process_single_camera(
-                sample_token, cam_channel, bev_width, bev_length, resolution
-            )
+            result = future.result()
+            cam_channel = result['cam_channel']
             bev_results[cam_channel] = {
-                'bev': bev,
-                'mask': mask,
-                'camera_info': camera_info
+                'bev': result['bev'],
+                'mask': result['mask'],
+                'camera_info': result['camera_info']
             }
-            cam_time = time.time() - cam_start
-            print(f"成功处理 {cam_channel}，耗时: {cam_time:.2f}秒")
-        except Exception as e:
-            print(f"处理 {cam_channel} 时出错: {str(e)}")
-            continue
     
-    total_time = time.time() - start_time
-    print(f"\n所有相机串行处理完成，总耗时: {total_time:.2f}秒")
-    print(f"成功处理的相机数: {len(bev_results)}/{len(camera_channels)}")
+    print(f"Successfully processed {len(bev_results)}/{len(camera_channels)} cameras")
     
     return bev_results
 
-def position_based_stitch_bev_images(bev_results, bev_width=40, bev_length=40, resolution=0.04):
+def position_based_stitch_bev_images(bev_results):
     """
-    基于相机位置信息拼接多个相机的BEV图像
+    Assemble multiple BEV images based on camera position information
     
-    参数:
-    - bev_results: 包含所有相机BEV结果的字典
-    - bev_width: 俯视图宽度（米）
-    - bev_length: 俯视图长度（米）
-    - resolution: 分辨率（米/像素）
+    Args:
+    - bev_results: dictionary containing all camera BEV results
+    - resolution: resolution (meters/pixel)
     
-    返回:
-    - stitched_bev: 拼接后的BEV图像
+    Returns:
+    - stitched_bev: stitched BEV image
     """
-    if not bev_results:
-        raise ValueError("没有有效的BEV结果可拼接")
     
-    # 获取BEV尺寸（假设所有BEV图像尺寸相同）
-    first_cam = list(bev_results.keys())[0]
-    bev_height, bev_width_pixels = bev_results[first_cam]['bev'].shape[:2]
-    
-    # 检查是否为RGBA图像
-    is_rgba = bev_results[first_cam]['bev'].shape[2] == 4
-    
-    # 初始化拼接结果
-    if is_rgba:
-        stitched_bev = np.zeros((bev_height, bev_width_pixels, 4), dtype=np.uint8)
-    else:
-        stitched_bev = np.ones((bev_height, bev_width_pixels, 3), dtype=np.uint8) * 255
-    
-    # 初始化累积权重图，用于平滑混合
-    weight_map = np.zeros((bev_height, bev_width_pixels), dtype=np.float32)
-    
-    # 创建相机贡献图，用于存储每个相机对每个像素的贡献
-    if is_rgba:
-        camera_contributions = np.zeros((bev_height, bev_width_pixels, len(bev_results), 4), dtype=np.float32)
-    else:
-        camera_contributions = np.zeros((bev_height, bev_width_pixels, len(bev_results), 3), dtype=np.float32)
-    
-    # 创建相机权重图
+    # Initialize variables
+    bev_height, bev_width_pixels = bev_results[list(bev_results.keys())[0]]['bev'].shape[:2]
+    stitched_bev = np.zeros((bev_height, bev_width_pixels, 4), dtype=np.uint8)
+    camera_contributions = np.zeros((bev_height, bev_width_pixels, len(bev_results), 4), dtype=np.float32)
     camera_weights = np.zeros((bev_height, bev_width_pixels, len(bev_results)), dtype=np.float32)
-    
-    # 相机位置的字典 
     camera_positions = {}
     
-    # 优先级顺序：前部相机 > 侧前相机 > 侧后相机 > 后部相机
-    # 这是因为前视图通常质量更好，后视图可能有扭曲
+    # Priority order: front camera > back camera > side front camera > side back camera
     camera_priority = {
         'CAM_FRONT': 1,
-        'CAM_FRONT_LEFT': 2,
-        'CAM_FRONT_RIGHT': 2,
-        'CAM_BACK': 4,
-        'CAM_BACK_LEFT': 3,
-        'CAM_BACK_RIGHT': 3
+        'CAM_FRONT_LEFT': 3,
+        'CAM_FRONT_RIGHT': 3,
+        'CAM_BACK': 2,
+        'CAM_BACK_LEFT': 4,
+        'CAM_BACK_RIGHT': 4
     }
     
-    # 第一步：收集每个相机的贡献
+    # Collect contributions from each camera
     for i, (cam_channel, result) in enumerate(bev_results.items()):
-        # 提取相机信息和BEV图像
+        # Extract camera information and BEV image
         bev = result['bev'].astype(np.float32)
         camera_info = result['camera_info']
         translation = camera_info['translation']
-        
-        # 记录相机在车辆坐标系中的位置
+        # Position of the camera in the ego coordinate system
         camera_positions[cam_channel] = translation
         
-        # 找出有效区域（Alpha > 0的像素）
-        if is_rgba:
-            valid_pixels = bev[:, :, 3] > 0
-        else:
-            valid_pixels = result['mask'] > 0
-            
+        # Collect valid pixels
+        valid_pixels = bev[:, :, 3] > 0    
         if not np.any(valid_pixels):
             continue
             
-        # 计算该相机的基础优先级（数值越小优先级越高）
-        base_priority = camera_priority.get(cam_channel, 5)
+        base_priority = camera_priority.get(cam_channel)
         
-        # 找出所有有效像素的坐标
+        # Collect coordinates of valid pixels
         y_indices, x_indices = np.where(valid_pixels)
         
-        # 计算边缘距离图（用于平滑过渡）
-        # 先创建二值掩码
+        # Valid pixels
         mask = np.zeros((bev_height, bev_width_pixels), dtype=np.uint8)
         mask[y_indices, x_indices] = 1
         
-        # 应用距离变换，计算每个像素到边缘的距离
+        # Distance from each pixel to the edge
         dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-        # 归一化距离变换结果
+        # Normalize
         max_dist = np.max(dist_transform) if np.max(dist_transform) > 0 else 1.0
         dist_transform = dist_transform / max_dist
         
-        # 对每个有效像素，存储相机贡献
+        # Calculate contribution for each pixel
         for j in range(len(y_indices)):
             y, x = y_indices[j], x_indices[j]
             
-            # 计算基于距离变换的权重（中心像素权重高，边缘像素权重低）
+            # Calculate weight
             edge_weight = dist_transform[y, x]
+            pixel_weight = base_priority * (1.0 - 0.3 * edge_weight)
+            pixel_weight = 1 / pixel_weight
             
-            # 最终权重是优先级和边缘距离的组合
-            pixel_weight = base_priority * (1.0 - 0.3 * edge_weight)  # 边缘权重影响30%
-            
-            # 存储像素贡献和权重
-            if is_rgba:
-                camera_contributions[y, x, i, :] = bev[y, x, :]
-            else:
-                camera_contributions[y, x, i, :] = bev[y, x, :3]
-            
-            camera_weights[y, x, i] = 1.0 / pixel_weight  # 权重反比于优先级值
+            # Store contribution and weight
+            camera_contributions[y, x, i, :] = bev[y, x, :]
+            camera_weights[y, x, i] = pixel_weight
     
-    # 第二步：合并所有相机的贡献
+    # Merge contributions from all cameras
     for y in range(bev_height):
         for x in range(bev_width_pixels):
-            # 获取所有相机在此像素的权重
             pixel_weights = camera_weights[y, x, :]
             
-            # 如果没有任何相机贡献，跳过
             if np.sum(pixel_weights) == 0:
                 continue
+            # If only one camera has contribution then use it
+            non_zero_indices = np.nonzero(pixel_weights)[0]
+            if len(non_zero_indices) == 1:
+                i = non_zero_indices[0]
+                stitched_bev[y, x, :] = camera_contributions[y, x, i, :].astype(np.uint8)
+                continue
             
-            # 归一化权重
             pixel_weights = pixel_weights / np.sum(pixel_weights)
-            
-            # 混合所有相机的贡献
-            blended_pixel = np.zeros(4 if is_rgba else 3, dtype=np.float32)
-            
+            # Merge contributions
+            blended_pixel = np.zeros(4, dtype=np.float32)
             for i in range(len(bev_results)):
                 if pixel_weights[i] > 0:
                     blended_pixel += pixel_weights[i] * camera_contributions[y, x, i, :]
-            
-            # 应用混合像素
-            if is_rgba:
-                # 如果Alpha大于0，则更新像素
-                if blended_pixel[3] > 0:
-                    stitched_bev[y, x, :] = blended_pixel.astype(np.uint8)
+            if blended_pixel[3] > 0:
+                stitched_bev[y, x, :] = blended_pixel.astype(np.uint8)
             else:
                 stitched_bev[y, x, :] = blended_pixel.astype(np.uint8)
     
-    # 第三步：应用后处理以平滑边缘
-    if is_rgba:
-        # 提取RGB和Alpha通道
-        rgb_channels = stitched_bev[:, :, :3]
-        alpha_channel = stitched_bev[:, :, 3]
-        
-        # 创建二值掩码（Alpha > 0的区域）
-        mask = (alpha_channel > 0).astype(np.uint8)
-        
-        # 应用形态学闭操作填充边缘间隙
-        kernel_size = max(3, int(5 * resolution / 0.1))
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        closed_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        
-        # 对RGB应用高斯模糊，仅在掩码内
-        blur_size = max(3, int(3 * resolution / 0.1))
-        if blur_size % 2 == 0:
-            blur_size += 1
-        
-        # 创建边缘掩码（仅包含边缘区域）
-        edge_mask = closed_mask - mask
-        
-        # 对边缘区域应用模糊
-        blurred_rgb = cv2.GaussianBlur(rgb_channels, (blur_size, blur_size), 0)
-        
-        # 在边缘区域使用模糊结果
-        edge_indices = np.where(edge_mask > 0)
-        rgb_channels[edge_indices] = blurred_rgb[edge_indices]
-        
-        # 更新Alpha通道
-        alpha_channel = cv2.morphologyEx(alpha_channel, cv2.MORPH_CLOSE, kernel)
-        alpha_channel = cv2.GaussianBlur(alpha_channel, (blur_size, blur_size), 0)
-        
-        # 重新组合RGB和Alpha
-        stitched_bev = np.dstack((rgb_channels, alpha_channel))
-    else:
-        # 对RGB图像应用高斯模糊
-        kernel_size = max(3, int(5 * resolution / 0.1))
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        stitched_bev = cv2.morphologyEx(stitched_bev, cv2.MORPH_CLOSE, kernel)
-        
-        blur_size = max(3, int(3 * resolution / 0.1))
-        if blur_size % 2 == 0:
-            blur_size += 1
-        stitched_bev = cv2.GaussianBlur(stitched_bev, (blur_size, blur_size), 0)
-    
-    print("相机在车辆坐标系中的位置:")
+    print("\nCamera positions in the ego coordinate system:")
     for cam, pos in camera_positions.items():
         print(f"{cam}: {pos}")
     
@@ -456,291 +267,141 @@ def position_based_stitch_bev_images(bev_results, bev_width=40, bev_length=40, r
 
 def create_colored_bev_visualization(bev_results):
     """
-    创建彩色编码的BEV可视化图像，每个相机使用不同颜色
+    Create colorful BEV mask to show the camera coverage
     
-    参数:
-    - bev_results: 包含所有相机BEV结果的字典
+    Args:
+    - bev_results: dictionary containing all camera BEV results
     
-    返回:
-    - colored_bev: 彩色编码的BEV图像
+    Returns:
+    - colored_bev: colored BEV image
     """
-    # 为每个相机分配颜色
+    # Set each camera color
     camera_colors = {
-        'CAM_FRONT': [255, 0, 0],          # 红色
-        'CAM_FRONT_LEFT': [255, 165, 0],   # 橙色
-        'CAM_FRONT_RIGHT': [255, 255, 0],  # 黄色
-        'CAM_BACK': [0, 0, 255],           # 蓝色
-        'CAM_BACK_LEFT': [75, 0, 130],     # 靛蓝色
-        'CAM_BACK_RIGHT': [238, 130, 238]  # 紫色
+        'CAM_FRONT': [255, 0, 0],          # Red
+        'CAM_FRONT_LEFT': [255, 165, 0],   # Orange
+        'CAM_FRONT_RIGHT': [255, 255, 0],  # Yellow
+        'CAM_BACK': [0, 0, 255],           # Blue
+        'CAM_BACK_LEFT': [75, 0, 130],     # Indigo
+        'CAM_BACK_RIGHT': [238, 130, 238]  # Purple
     }
     
-    # 获取BEV尺寸
-    first_cam = list(bev_results.keys())[0]
-    bev_height, bev_width = bev_results[first_cam]['bev'].shape[:2]
+    bev_height, bev_width = bev_results[list(bev_results.keys())[0]]['bev'].shape[:2]
+    colored_bev = np.zeros((bev_height, bev_width, 4), dtype=np.uint8)
     
-    # 检查是否为RGBA格式
-    is_rgba = bev_results[first_cam]['bev'].shape[2] == 4
-    
-    # 初始化彩色BEV图像
-    if is_rgba:
-        # 带透明通道
-        colored_bev = np.zeros((bev_height, bev_width, 4), dtype=np.uint8)
-    else:
-        # 白色背景
-        colored_bev = np.ones((bev_height, bev_width, 3), dtype=np.uint8) * 255
-    
-    # 添加半透明的相机覆盖范围
+    # Create mask for each camera
     for cam_channel, result in bev_results.items():
-        # 确定掩码
-        if is_rgba:
-            mask = result['bev'][:, :, 3] > 0
-        else:
-            mask = result['mask'] > 0
+        mask = result['bev'][:, :, 3] > 0
             
         if cam_channel in camera_colors:
             color = np.array(camera_colors[cam_channel], dtype=np.uint8)
+            for c in range(3):
+                colored_bev[:, :, c][mask] = color[c]
             
-            # 应用颜色到掩码区域
-            if is_rgba:
-                # 对于RGBA图像，设置RGB通道并更新Alpha通道
-                for c in range(3):
-                    colored_bev[:, :, c][mask] = color[c]
-                
-                # 设置Alpha通道为不透明
-                colored_bev[:, :, 3][mask] = 255
-            else:
-                # 对于RGB图像，应用颜色
-                for c in range(3):
-                    colored_bev[:, :, c][mask] = color[c]
+            # Set Alpha channel to 255
+            colored_bev[:, :, 3][mask] = 255
     
     return colored_bev
 
-def camera_pixel_to_bev_pixel(camera_channel, translation, bev_height, bev_width_pixels, resolution=0.04):
-    """
-    将相机在车辆坐标系中的位置转换为BEV图像中的像素坐标
-    
-    参数:
-    - camera_channel: 相机通道名称
-    - translation: 相机在车辆坐标系中的位置
-    - bev_height: BEV图像高度（像素）
-    - bev_width_pixels: BEV图像宽度（像素）
-    - resolution: 分辨率（米/像素）
-    
-    返回:
-    - pixel_x, pixel_y: 相机在BEV图像中的像素坐标
-    """
-    camera_x = translation[0]
-    camera_y = translation[1]
-    
-    # 对于后部相机，特殊处理坐标映射
-    if 'BACK' in camera_channel:
-        # 后部相机需要映射到图像的上部区域
-        pixel_y = int(bev_height/2 - camera_x / resolution)
-    else:
-        # 前部和侧部相机使用原有映射
-        pixel_y = bev_height - 1 - int(camera_x / resolution)
-    
-    # 横向坐标映射保持不变
-    pixel_x = int(bev_width_pixels / 2 + camera_y / resolution)
-    
-    return pixel_x, pixel_y
-
 def visualize_multicam_bev(sample_token, bev_results, stitched_bev=None, save_flag=False):
     """
-    可视化多相机BEV结果
+    Visualize multicamera BEV results
     
-    参数:
-    - sample_token: 样本token
-    - bev_results: 包含所有相机BEV结果的字典
-    - stitched_bev: 拼接后的BEV图像（可选）
-    - save_flag: 是否保存图像
+    Args:
+    - sample_token: sample token
+    - bev_results: dictionary containing all camera BEV results
+    - stitched_bev: stitched BEV image (optional)
+    - save_flag: whether to save image
     """
-    # 计算绘图所需的行数和列数
-    num_cameras = len(bev_results)
+    # Get the number of rows and columns for the plot
     n_cols = 3
-    n_rows = (num_cameras // n_cols) + 1  # +1 为拼接结果和彩色可视化
-    
+    n_rows = 4  # For the stitched BEV and the colored visualization
     plt.figure(figsize=(n_cols * 5, n_rows * 5))
     
-    # 检查是否为RGBA格式
-    first_cam = list(bev_results.keys())[0]
-    is_rgba = bev_results[first_cam]['bev'].shape[2] == 4
-    
-    # 绘制每个相机的BEV
+    # Plot each camera's BEV
     for i, (cam_channel, result) in enumerate(bev_results.items()):
         plt.subplot(n_rows, n_cols, i + 1)
         plt.title(f'BEV: {cam_channel}')
-        
         bev_img = result['bev']
-        if is_rgba:
-            # 为RGBA图像创建白色背景
-            white_bg = np.ones((bev_img.shape[0], bev_img.shape[1], 3), dtype=np.uint8) * 255
-            alpha = bev_img[:, :, 3].astype(float) / 255
-            alpha = np.expand_dims(alpha, axis=2)
-            rgb = bev_img[:, :, 0:3]
-            composite = (rgb * alpha + white_bg * (1 - alpha)).astype(np.uint8)
-            plt.imshow(composite)
-        else:
-            plt.imshow(bev_img)
+        plt.imshow(bev_img)
         plt.axis('off')
         
-        # 获取图像中心坐标（表示车辆位置）
+        # Get the center coordinates of the image (representing the vehicle position)
         bev_height, bev_width_pixels = bev_img.shape[:2]
         center_x = bev_width_pixels // 2
         center_y = bev_height // 2
         
-        # 在图像中心标记车辆位置
-        plt.plot(center_x, center_y, 'o', color='red', markersize=8)
+        # Plot the vehicle position
+        plt.plot(center_x, center_y, 'o', color='red', markersize=3)
         
-        # 标记相机位置
+        # Plot the camera position
         translation = result['camera_info']['translation']
-        cam_x = translation[0]  # 相机X坐标（前/后）
-        cam_y = translation[1]  # 相机Y坐标（左/右）
-        
-        # 计算相机在图像中的位置（相对于中心点）- 适应水平镜像
-        cam_pixel_x = center_x - int(cam_y / 0.04)  # Y轴对应横向，镜像后负号变为减号
-        cam_pixel_y = center_y - int(cam_x / 0.04)  # X轴对应纵向（正值向上）
-        
-        # 标记相机位置
+        cam_x = translation[0]
+        cam_y = translation[1]
+        # Calculate the camera position in the image (relative to the center point) - adapted to horizontal mirroring
+        cam_pixel_x = center_x - int(cam_y / 0.04)  # Y-axis corresponds to the horizontal axis, and the negative sign becomes a subtraction
+        cam_pixel_y = center_y - int(cam_x / 0.04)  # X-axis corresponds to the vertical axis (positive upwards)
         if 0 <= cam_pixel_y < bev_height and 0 <= cam_pixel_x < bev_width_pixels:
-            plt.plot(cam_pixel_x, cam_pixel_y, 'o', color='blue', markersize=6)
-            plt.text(cam_pixel_x + 3, cam_pixel_y + 3, cam_channel.split('_')[1], 
-                     color='white', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
+            plt.plot(cam_pixel_x, cam_pixel_y, 'o', color='blue', markersize=3)
     
-    # 如果提供了拼接BEV，绘制它
     if stitched_bev is not None:
-        plt.subplot(n_rows, n_cols, num_cameras + 1)
+        plt.subplot(n_rows, n_cols, 7)
         plt.title('Stitched BEV (All Cameras)')
-        
-        if is_rgba:
-            # 为RGBA图像创建白色背景
-            white_bg = np.ones((stitched_bev.shape[0], stitched_bev.shape[1], 3), dtype=np.uint8) * 255
-            alpha = stitched_bev[:, :, 3].astype(float) / 255
-            alpha = np.expand_dims(alpha, axis=2)
-            rgb = stitched_bev[:, :, 0:3]
-            composite = (rgb * alpha + white_bg * (1 - alpha)).astype(np.uint8)
-            plt.imshow(composite)
-        else:
-            plt.imshow(stitched_bev)
+        plt.imshow(stitched_bev)
         plt.axis('off')
         
-        # 在拼接图像中，标记车辆中心位置
+        # Plot the camera position
+        for cam_channel, result in bev_results.items():
+            translation = result['camera_info']['translation']
+            cam_x = translation[0]
+            cam_y = translation[1]
+            cam_pixel_x = center_x - int(cam_y / 0.04)  # Y-axis corresponds to the horizontal axis, and the negative sign becomes a subtraction
+            cam_pixel_y = center_y - int(cam_x / 0.04)  # X-axis corresponds to the vertical axis (positive upwards)
+                
+            plt.plot(cam_pixel_x, cam_pixel_y, 'o', color='blue', markersize=3)
+        
+        # Plot the vehicle center position
         bev_height, bev_width_pixels = stitched_bev.shape[:2]
         center_x = bev_width_pixels // 2
         center_y = bev_height // 2
-        
-        # 绘制车辆中心位置
-        plt.plot(center_x, center_y, 'o', color='red', markersize=8)
-        plt.text(center_x + 5, center_y + 5, 'EGO', color='white', 
-                 bbox=dict(facecolor='black', alpha=0.5))
-        
-        # 绘制所有相机位置（以不同颜色标记）
-        for cam_channel, result in bev_results.items():
-            # 获取相机位置
-            translation = result['camera_info']['translation']
-            cam_x = translation[0]  # 相机X坐标（前/后）
-            cam_y = translation[1]  # 相机Y坐标（左/右）
-            
-            # 计算相机在图像中的位置（相对于中心点）- 适应水平镜像
-            cam_pixel_x = center_x - int(cam_y / 0.04)  # Y轴对应横向，镜像后负号变为减号
-            cam_pixel_y = center_y - int(cam_x / 0.04)  # X轴对应纵向（正值向上）
-            
-            # 确保坐标在图像范围内
-            if 0 <= cam_pixel_y < bev_height and 0 <= cam_pixel_x < bev_width_pixels:
-                # 根据相机类型选择颜色
-                if 'FRONT' in cam_channel and 'LEFT' not in cam_channel and 'RIGHT' not in cam_channel:
-                    color = 'red'  # 前部相机
-                elif 'FRONT_LEFT' in cam_channel:
-                    color = 'orange'  # 左前相机
-                elif 'FRONT_RIGHT' in cam_channel:
-                    color = 'yellow'  # 右前相机
-                elif 'BACK' in cam_channel and 'LEFT' not in cam_channel and 'RIGHT' not in cam_channel:
-                    color = 'blue'  # 后部相机
-                elif 'BACK_LEFT' in cam_channel:
-                    color = 'indigo'  # 左后相机
-                elif 'BACK_RIGHT' in cam_channel:
-                    color = 'purple'  # 右后相机
-                else:
-                    color = 'white'
-                
-                plt.plot(cam_pixel_x, cam_pixel_y, 'o', color=color, markersize=6)
-                plt.text(cam_pixel_x + 3, cam_pixel_y + 3, cam_channel.split('_')[1], 
-                         color='white', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
+        plt.plot(center_x, center_y, 'o', color='red', markersize=3)
     
-    # 绘制彩色编码的可视化
+    # Plot the visualization
     colored_viz = create_colored_bev_visualization(bev_results)
-    plt.subplot(n_rows, n_cols, num_cameras + 2)
+    plt.subplot(n_rows, n_cols, 8)
     plt.title('Camera Coverage Visualization')
     plt.imshow(colored_viz)
     plt.axis('off')
     
     plt.tight_layout()
     if save_flag:
-        plt.savefig(f'multicam_bev_stitched_{sample_token[:8]}.png')
+        plt.savefig(f'multicam_bev_stitched_{sample_token[:8]}.png', transparent=True)
     plt.show()
     
-    # 单独显示拼接BEV
+    # Show the BEV individually
     if stitched_bev is not None:
         plt.figure(figsize=(10, 10))
         plt.title('Stitched Bird\'s Eye View (All Cameras)')
-        
-        if is_rgba:
-            # 为RGBA图像创建白色背景
-            white_bg = np.ones((stitched_bev.shape[0], stitched_bev.shape[1], 3), dtype=np.uint8) * 255
-            alpha = stitched_bev[:, :, 3].astype(float) / 255
-            alpha = np.expand_dims(alpha, axis=2)
-            rgb = stitched_bev[:, :, 0:3]
-            composite = (rgb * alpha + white_bg * (1 - alpha)).astype(np.uint8)
-            plt.imshow(composite)
-        else:
-            plt.imshow(stitched_bev)
+        plt.imshow(stitched_bev)
         plt.axis('off')
         
-        # 在拼接图像中，标记车辆中心位置
+        # Plot all camera positions
+        for cam_channel, result in bev_results.items():
+            translation = result['camera_info']['translation']
+            cam_x = translation[0]
+            cam_y = translation[1]
+            cam_pixel_x = center_x - int(cam_y / 0.04)
+            cam_pixel_y = center_y - int(cam_x / 0.04)
+                
+            plt.plot(cam_pixel_x, cam_pixel_y, 'o', color='blue', markersize=3)
+        
+        # Plot the vehicle center position
         bev_height, bev_width_pixels = stitched_bev.shape[:2]
         center_x = bev_width_pixels // 2
         center_y = bev_height // 2
-        
-        # 绘制车辆中心位置
-        plt.plot(center_x, center_y, 'o', color='red', markersize=8)
-        plt.text(center_x + 5, center_y + 5, 'EGO', color='white', 
-                 bbox=dict(facecolor='black', alpha=0.5))
-        
-        # 绘制所有相机位置（以不同颜色标记）
-        for cam_channel, result in bev_results.items():
-            # 获取相机位置
-            translation = result['camera_info']['translation']
-            cam_x = translation[0]  # 相机X坐标（前/后）
-            cam_y = translation[1]  # 相机Y坐标（左/右）
-            
-            # 计算相机在图像中的位置（相对于中心点）- 适应水平镜像
-            cam_pixel_x = center_x - int(cam_y / 0.04)  # Y轴对应横向，镜像后负号变为减号
-            cam_pixel_y = center_y - int(cam_x / 0.04)  # X轴对应纵向（正值向上）
-            
-            # 确保坐标在图像范围内
-            if 0 <= cam_pixel_y < bev_height and 0 <= cam_pixel_x < bev_width_pixels:
-                # 根据相机类型选择颜色
-                if 'FRONT' in cam_channel and 'LEFT' not in cam_channel and 'RIGHT' not in cam_channel:
-                    color = 'red'  # 前部相机
-                elif 'FRONT_LEFT' in cam_channel:
-                    color = 'orange'  # 左前相机
-                elif 'FRONT_RIGHT' in cam_channel:
-                    color = 'yellow'  # 右前相机
-                elif 'BACK' in cam_channel and 'LEFT' not in cam_channel and 'RIGHT' not in cam_channel:
-                    color = 'blue'  # 后部相机
-                elif 'BACK_LEFT' in cam_channel:
-                    color = 'indigo'  # 左后相机
-                elif 'BACK_RIGHT' in cam_channel:
-                    color = 'purple'  # 右后相机
-                else:
-                    color = 'white'
-                
-                plt.plot(cam_pixel_x, cam_pixel_y, 'o', color=color, markersize=6)
-                plt.text(cam_pixel_x + 3, cam_pixel_y + 3, cam_channel.split('_')[1], 
-                         color='white', fontsize=8, bbox=dict(facecolor='black', alpha=0.5))
+        plt.plot(center_x, center_y, 'o', color='red', markersize=3)
         
         if save_flag:
-            plt.savefig(f'stitched_bev_{sample_token[:8]}.png', transparent=is_rgba)
+            plt.savefig(f'stitched_bev_{sample_token[:8]}.png', transparent=True)
         plt.show()
 
 def detect_camera_edges(bevs, dilate_size=3):
@@ -1156,41 +817,28 @@ def smooth_blend_stitch_bev_images(bev_results, sample_token=None, bev_width=40,
     
     return stitched_bev
 
-def create_multicam_bev(sample_token, bev_width=40, bev_length=40, resolution=0.04, use_parallel=True, save_flag=False, blend_factor=0.3, fusion_strategy='smooth_blend'):
+def create_multicam_bev(sample_token, bev_width=40, bev_length=40, resolution=0.04, save_flag=False, blend_factor=0.3, fusion_strategy=''):
     """
-    创建多相机拼接的BEV图像
+    Create BEV
     
-    参数:
-    - sample_token: 样本token
-    - bev_width: 俯视图宽度（米）
-    - bev_length: 俯视图长度（米）
-    - resolution: 分辨率（米/像素）
-    - use_parallel: 是否使用并行处理
-    - save_flag: 是否保存图像
-    - blend_factor: 混合因子(0-1)，越大边缘越平滑，默认0.3
-    - fusion_strategy: 融合策略，可选'position_based'或'smooth_blend'
+    Args:
+    - sample_token: sample token
+    - bev_width: bev width (meter)
+    - bev_length: bev length (meter)
+    - resolution: resolution (meter/pixel)
+    - use_parallel: whether to use parallel processing
+    - save_flag: whether to save image
+    - blend_factor: blend factor (0-1)
+    - fusion_strategy: fusion strategy, optional 'position_based' or 'smooth_blend'
     
-    返回:
-    - stitched_bev: 拼接后的BEV图像
-    - bev_results: 各个相机的BEV结果
-    """
-    start_time = time.time()
-    
-    # 1. 处理所有相机（并行或串行）
-    if use_parallel:
-        bev_results = process_all_cameras_parallel(sample_token, bev_width, bev_length, resolution)
-    else:
-        bev_results = process_all_cameras(sample_token, bev_width, bev_length, resolution)
-    
-    processing_time = time.time() - start_time
-    print(f"所有相机处理时间: {processing_time:.2f}秒")
-    
-    # 2. 根据选择的策略拼接BEV图像
-    stitching_start = time.time()
+    Returns:
+    - stitched_bev: stitched BEV image
+    - bev_results: bev results of each camera
+    """    
+    bev_results = process_all_cameras_parallel(sample_token, bev_width, bev_length, resolution)
     
     if fusion_strategy == 'smooth_blend':
-        # 使用平滑混合策略
-        transition_width = int(10 * blend_factor)  # 根据blend_factor调整过渡宽度
+        transition_width = int(10 * blend_factor)
         stitched_bev = smooth_blend_stitch_bev_images(
             bev_results, 
             sample_token=sample_token,
@@ -1201,107 +849,28 @@ def create_multicam_bev(sample_token, bev_width=40, bev_length=40, resolution=0.
             transition_width=transition_width
         )
     else:
-        # 使用基于位置的拼接（默认）
-        stitched_bev = position_based_stitch_bev_images(bev_results, bev_width, bev_length, resolution)
+        stitched_bev = position_based_stitch_bev_images(bev_results)
     
-    stitching_time = time.time() - stitching_start
-    print(f"图像拼接时间: {stitching_time:.2f}秒")
-    
-    # 3. 额外应用边缘平滑处理
-    if fusion_strategy != 'smooth_blend' and blend_factor > 0:
-        # 如果使用的不是smooth_blend策略，则应用额外的边缘平滑
-        print("应用额外的边缘平滑...")
-        
-        # 检查是否为RGBA图像
-        is_rgba = stitched_bev.shape[2] == 4
-        
-        # 应用额外的边缘平滑
-        kernel_size = max(3, int(7 * resolution / 0.1 * blend_factor))
-        if kernel_size % 2 == 0:  # 确保kernel_size是奇数
-            kernel_size += 1
-            
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        
-        if is_rgba:
-            # 分离通道
-            rgb_channels = stitched_bev[:, :, :3].copy()
-            alpha_channel = stitched_bev[:, :, 3].copy()
-            
-            # 只对有内容的区域应用模糊
-            mask = (alpha_channel > 0).astype(np.uint8)
-            
-            # 应用边缘检测找出拼接边界
-            edges = cv2.Canny(mask, 50, 150)
-            
-            # 扩大边缘区域
-            dilated_edges = cv2.dilate(edges, kernel, iterations=1)
-            
-            # 对边缘区域应用高斯模糊
-            blur_size = max(5, int(5 * blend_factor * resolution / 0.04))
-            if blur_size % 2 == 0:
-                blur_size += 1
-                
-            blurred_rgb = cv2.GaussianBlur(rgb_channels, (blur_size, blur_size), 0)
-            
-            # 将模糊结果应用到边缘区域
-            edge_indices = np.where(dilated_edges > 0)
-            if len(edge_indices[0]) > 0:  # 确保有边缘像素
-                rgb_channels[edge_indices] = blurred_rgb[edge_indices]
-            
-            # 重新合并通道
-            stitched_bev = np.dstack((rgb_channels, alpha_channel))
-        else:
-            # 应用边缘检测找出拼接边界
-            gray = cv2.cvtColor(stitched_bev, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            
-            # 扩大边缘区域
-            dilated_edges = cv2.dilate(edges, kernel, iterations=1)
-            
-            # 对边缘区域应用高斯模糊
-            blur_size = max(5, int(5 * blend_factor * resolution / 0.04))
-            if blur_size % 2 == 0:
-                blur_size += 1
-                
-            blurred_img = cv2.GaussianBlur(stitched_bev, (blur_size, blur_size), 0)
-            
-            # 将模糊结果应用到边缘区域
-            edge_indices = np.where(dilated_edges > 0)
-            if len(edge_indices[0]) > 0:  # 确保有边缘像素
-                for c in range(3):  # RGB通道
-                    stitched_bev[edge_indices[0], edge_indices[1], c] = blurred_img[edge_indices[0], edge_indices[1], c]
-    
-    # 4. 可视化结果
     visualize_multicam_bev(sample_token, bev_results, stitched_bev, save_flag)
-    
-    # 总时间
-    total_time = time.time() - start_time
-    print(f"总处理时间: {total_time:.2f}秒")
-    
-    # 5. 保存拼接图像
-    if save_flag and stitched_bev.shape[2] == 4:  # RGBA格式
-        print("保存PNG格式图像...")
+
+    if save_flag and stitched_bev.shape[2] == 4:
         cv2.imwrite(f'stitched_bev_{fusion_strategy}_{sample_token[:8]}.png', 
                    cv2.cvtColor(stitched_bev, cv2.COLOR_RGBA2BGRA))
+        print('Successfully saved stitched BEV image')
     
     return stitched_bev, bev_results
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("多相机BEV拼接（基于相机位置信息）")
-    print("=" * 60)
+    print("=" * 40)
     
-    # 获取示例数据
-    my_sample = nusc.sample[120]
+    my_sample = nusc.sample[70]
     
-    # 创建多相机BEV图像并拼接
     stitched_bev, bev_results = create_multicam_bev(
         my_sample['token'], 
         bev_width=40,
         bev_length=40,
         resolution=0.04,
-        use_parallel=True,
-        save_flag=True,
-        blend_factor=0.6,  # 增加混合因子以加强边缘平滑效果
-        fusion_strategy='smooth_blend'  # 使用平滑混合策略
+        save_flag=False,
+        blend_factor=0.6,  # Increase blend factor to enhance edge smoothing
+        fusion_strategy='smooth_blend_'
     ) 
