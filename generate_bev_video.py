@@ -94,9 +94,16 @@ def generate_bev_video(nusc, output_path, num_frames=6, start_frame=0, fps=2, fu
                         marker_radius = 5
                         cv2.circle(stitched_with_detections, (x, y), marker_radius, color, -1)
                         
-                        # Add class label
-                        cv2.putText(stitched_with_detections, cls, (x, y - marker_radius - 5), 
+                        # Add class label and distance
+                        label_text = f"{cls}"
+                        cv2.putText(stitched_with_detections, label_text, (x + marker_radius + 2, y - marker_radius), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color[:3], 1, cv2.LINE_AA)
+                        if 'distance' in box:
+                            distance = box['distance']
+                            dist_text = f"{distance:.1f}m"
+                            # Position distance text below the class label
+                            cv2.putText(stitched_with_detections, dist_text, (x + marker_radius + 2, y + 5), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color[:3], 1, cv2.LINE_AA)
                 
                     # Use the BEV with detections for the frame
                     frame_to_save = stitched_with_detections

@@ -371,8 +371,16 @@ def visualize_multicam_bev(bev_results, stitched_bev, flag_save=False, image_pat
             cls = box['class']
             color = color_map.get(cls)
             cv2.circle(stitched_display, (x, y), 5, color, -1)
-            cv2.putText(stitched_display, cls, (x, y), 
+            # Add class label
+            label_text = f"{cls}"
+            cv2.putText(stitched_display, label_text, (x + 7, y - 5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color[:3], 1, cv2.LINE_AA)
+            # Add distance if available
+            if 'distance' in box:
+                distance = box['distance']
+                dist_text = f"{distance:.1f}m"
+                cv2.putText(stitched_display, dist_text, (x + 7, y + 7), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color[:3], 1, cv2.LINE_AA)
 
     # Create the figure and plot the final image
     # plt.figure(figsize=(10, 10))
@@ -432,7 +440,8 @@ def create_multicam_bev(sample_token, bev_width=40, bev_length=40, resolution=0.
         print("Applying post-stitching brightness adjustment...")
         stitched_bev = brightness_balance(stitched_bev)
 
-    visualize_multicam_bev(sample_token, bev_results, stitched_bev, save_flag)
+    # Corrected call: removed sample_token as it's not a parameter of visualize_multicam_bev
+    visualize_multicam_bev(bev_results, stitched_bev, flag_save=save_flag)
 
     if save_flag:
         cv2.imwrite(f'stitched_bev_{fusion_strategy}_{sample_token[:8]}.png', 

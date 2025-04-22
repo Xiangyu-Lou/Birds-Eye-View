@@ -75,7 +75,8 @@ def project_detections_to_bev(results, K, cam_to_ego, bev_width_pixels=1000, bev
                 'bev_x': bev_x,
                 'bev_y': bev_y,
                 'class': cls_name,
-                'confidence': conf
+                'confidence': conf,
+                'distance': t
             })
     
     return detection_points
@@ -120,8 +121,16 @@ def visualize_bev_with_detections(bev_img, detection_img, projected_boxes, flag_
         # Draw circle marker on BEV image
         cv2.circle(bev_with_detections, (x, y), 7, color, -1)
         
-        # Add class label
-        cv2.putText(bev_with_detections, cls, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color[:3], 1, cv2.LINE_AA)
+        # Add class label and distance
+        label_text = f"{cls}"
+        cv2.putText(bev_with_detections, label_text, (x + 10, y - 7), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color[:3], 1, cv2.LINE_AA)
+        if 'distance' in box:
+            distance = box['distance']
+            dist_text = f"{distance:.1f}m"
+            # Position distance text below the class label
+            cv2.putText(bev_with_detections, dist_text, (x + 10, y + 7), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color[:3], 1, cv2.LINE_AA)
     
     plt.imshow(bev_with_detections)
     plt.axis('off')
