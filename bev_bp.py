@@ -383,7 +383,7 @@ def visualize_multicam_bev(bev_results, stitched_bev, flag_save=False, image_pat
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, color[:3], 1, cv2.LINE_AA)
 
     # Create the figure and plot the final image
-    # plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(10, 10))
     plt.title(title)
     plt.imshow(stitched_display)
     plt.axis('off')

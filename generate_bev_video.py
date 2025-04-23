@@ -196,7 +196,7 @@ def main():
     Main function to parse arguments and generate BEV video
     """
     parser = argparse.ArgumentParser(description='Generate BEV video from nuScenes samples with object detection')
-    parser.add_argument('--output', type=str, default='bev_video_detection.mp4', help='Output video path (MP4 format)')
+    parser.add_argument('--output', type=str, default='bev_video.mp4', help='Output video path (MP4 format)')
     parser.add_argument('--frames', type=int, default=120, help='Number of frames to process')
     parser.add_argument('--start_frame', type=int, default=40, help='Index of the first frame to process')
     parser.add_argument('--fps', type=int, default=2, help='Frames per second in output video')

@@ -1,6 +1,6 @@
 # Multi-Camera Bird's Eye View (BEV) Generator
 
-A comprehensive toolkit for generating Bird's Eye View (BEV) visualizations from multi-camera systems using the NuScenes dataset. This project provides various methods for projecting camera images onto a ground plane, stitching them together, and overlaying object detection results.
+A comprehensive toolkit for generating Bird's Eye View (BEV) visualizations from multi-camera systems using the NuScenes dataset. This project provides various methods for projecting camera images onto a ground plane, stitching them together, and overlaying object detection results and distance information.
 
 ![Demo](videos/bev_video_detection.gif)
 
@@ -14,6 +14,7 @@ A comprehensive toolkit for generating Bird's Eye View (BEV) visualizations from
 - **Customizable Resolution**: Adjust BEV resolution to balance detail and performance.
 - **Brightness Balancing**: Post-processing option to harmonize brightness across the stitched image.
 - **Video Generation**: Create MP4 videos from BEV frames with or without detection markers.
+- **Distance Calculation**: Calculate distance to objects in the BEV video.
 
 ## Installation
 
@@ -95,6 +96,10 @@ The project uses YOLOv8 to detect objects in camera images and project them onto
 
 - Supported classes: person, car, truck, bus, motorcycle, bicycle
 - Detection points are visualized with color-coded markers
+
+## Distance Calculation
+
+The distance calculation is based on the camera position and the object's position in the BEV.
 
 ## Reference
 [surround-view-system-introduction](https://github.com/hynpu/surround-view-system-introduction/blob/master/doc/en.md)
